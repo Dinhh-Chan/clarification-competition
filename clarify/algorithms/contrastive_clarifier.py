@@ -4,7 +4,8 @@
 """ContrastiveClarifier: draft an implementation first, then always ask one
 confirmation question about the draft's riskiest assumption, regenerate with the
 answer, repair against the prompt's own examples, and pick the final code by
-execution agreement among a few regenerated candidates.
+execution agreement among a few regenerated candidates, voting only on probe
+inputs that satisfy an LLM-written input precondition.
 
 Team: Dinh
 Team Members: Dinh
@@ -74,6 +75,13 @@ zero, bounds) that a correct implementation must handle. Respect the user's
 clarification if one is given. Use only inputs the description allows. Return only
 a fenced python block that defines a list named INPUTS; each element is a tuple of
 the positional arguments of one call, e.g. INPUTS = [([1, 2, 3], 2), ([], 0)].
+{valid_rule}"""
+
+VALID_RULE = """In the same block, also define valid(*args) -> bool: the input precondition,
+i.e. True exactly when the call arguments satisfy what the description (and the
+clarification) requires of each variable: number of arguments, types, value
+ranges, structure (e.g. non-empty, sorted, distinct, length relations). Use only
+stated or clearly implied conditions; when unsure about a condition, allow it.
 """
 
 HARNESS = r"""
@@ -91,6 +99,21 @@ try:
     exec(PROBE_CODE, _ns)
     signal.alarm(0)
     _inputs = list(_ns["INPUTS"])[:12]
+    _valid = _ns.get("valid")
+    if FILTER_VALID and callable(_valid):
+        _kept = []
+        for _inp in _inputs:
+            _args = _inp if isinstance(_inp, tuple) else (_inp,)
+            try:
+                signal.alarm(2)
+                _ok = bool(_valid(*copy.deepcopy(_args)))
+                signal.alarm(0)
+            except BaseException:
+                signal.alarm(0)
+                _ok = False
+            if _ok:
+                _kept.append(_inp)
+        _inputs = _kept
 except BaseException:
     signal.alarm(0)
 for _code in CANDIDATES:
@@ -159,6 +182,10 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         # Final code is chosen by execution consensus among this many candidates
         # (the first is the usual one; ties keep it).
         "final_candidates": 3,
+        # Vote only on probe inputs that satisfy an LLM-written input precondition.
+        "valid_filter": True,
+        # Experiments only: append a comment recording whether selection switched.
+        "trace": False,
     }
 
     def generate_code(self, env, messages, entry_point):
@@ -310,7 +337,11 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
                 [
                     {
                         "role": "system",
-                        "content": PROBE.format(num_probes=10, entry_point=entry_point),
+                        "content": PROBE.format(
+                            num_probes=12,
+                            entry_point=entry_point,
+                            valid_rule=VALID_RULE if self.config["valid_filter"] else "",
+                        ),
                     },
                     {"role": "user", "content": context},
                 ]
@@ -325,6 +356,8 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             + repr(candidates)
             + "\nENTRY = "
             + repr(entry_point)
+            + "\nFILTER_VALID = "
+            + repr(bool(self.config["valid_filter"]))
             + "\n"
             + HARNESS
         )
@@ -337,7 +370,7 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             return code
         rows = result.get("rows", [])
         if not result.get("n") or len(rows) != len(candidates):
-            return code
+            return self.traced(code, "noprobes", result.get("n"))
         # Exceptions never count as agreement: make each one unique to its candidate.
         signatures = [
             None
@@ -350,5 +383,10 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         ]
         best = max(range(len(candidates)), key=lambda index: support[index])
         if support[best] <= max(support[0], 1):
+            return self.traced(code, "kept", result.get("n"))
+        return self.traced(candidates[best], "switched", result.get("n"))
+
+    def traced(self, code, decision, probes):
+        if not self.config["trace"]:
             return code
-        return candidates[best]
+        return code + "\n# consensus: " + decision + " probes=" + str(probes)
