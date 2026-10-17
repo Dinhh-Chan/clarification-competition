@@ -3,12 +3,14 @@
 
 """ContrastiveClarifier: draft an implementation first, then always ask one
 confirmation question about the draft's riskiest assumption, regenerate with the
-answer, repair against the prompt's own examples, and pick the final code by
-execution agreement among a few regenerated candidates, voting only on probe
-inputs that satisfy an LLM-written input precondition.
+answer, repair against the prompt's own examples, pick the final code by
+execution agreement among a few regenerated candidates (voting only on probe
+inputs that satisfy an LLM-written input precondition), and make the final
+function tolerant to call-convention mismatches.
 
 Team: Dinh
-Team Members: Dinh
+Team Members: Dinh (Posts and Telecommunications Institute of Technology),
+    Van-Hoang Le (University of Luxembourg)
 Main Contact: dinhtd.b23cc038@stu.ptit.edu.vn
 """
 
@@ -25,6 +27,111 @@ the user's clarification are authoritative; when a clarification contradicts an
 example in the prompt, follow the clarification. Do not invent facts.
 Return only a fenced python implementation, no questions or explanations.
 """
+
+ROBUST = """
+Coding conventions (they never override the requirement or the user's answer):
+- Do not narrow the input domain beyond what is stated: do not assume list
+  elements are hashable, numbers are positive, strings are ASCII, or inputs are
+  non-empty. Prefer equality-based membership and counting over set/dict tricks
+  when element types are not stated.
+- Prefer the conventional reading of ordinary terms: split words on any
+  whitespace (str.split()) unless a specific delimiter is required.
+- Handle empty and vacuous cases naturally (an empty pattern occurs in any
+  string, all() of nothing is True, no matches gives an empty result) unless the
+  requirement says otherwise.
+- Never fake the computation to satisfy an impossible or irrelevant
+  implementation constraint (e.g. "must be O(1)", "no loops"): implement the
+  correct behavior with ordinary code.
+"""
+
+CALL_ADAPTER = r"""
+
+def _call_adapter(fn):
+    import copy, functools, inspect
+
+    try:
+        _params = list(inspect.signature(fn).parameters.values())
+    except (TypeError, ValueError):
+        _params = None
+
+    def _alternatives(args, error):
+        alts = []
+        message = str(error)
+        positional = None
+        if _params is not None and not any(p.kind == p.VAR_POSITIONAL for p in _params):
+            positional = [p for p in _params if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
+        if positional is not None:
+            limit = len(positional)
+            required = sum(p.default is p.empty for p in positional)
+            if len(args) > limit:
+                alts.append(tuple(args[:limit]))
+            if len(args) < required:
+                missing = required - len(args)
+                sized = next((a for a in args if hasattr(a, "__len__")), None)
+                if sized is not None:
+                    alts.append(tuple(args) + (len(sized),) * missing)
+                alts.append(tuple(args) + (None,) * missing)
+        if len(args) == 2:
+            a, b = args
+            seq = (list, tuple, str, dict, set)
+            if isinstance(a, seq) != isinstance(b, seq):
+                alts.append((b, a))
+        as_str = tuple(str(x) if isinstance(x, int) and not isinstance(x, bool) else x for x in args)
+        if as_str != args:
+            alts.append(as_str)
+        as_int = tuple(int(x) if isinstance(x, str) and x.strip().lstrip("-").isdigit() else x for x in args)
+        if as_int != args:
+            alts.append(as_int)
+        if "not iterable" in message:
+            for i, x in enumerate(args):
+                if isinstance(x, int) and not isinstance(x, bool) and 0 <= x <= 10000:
+                    alts.append(tuple(args[:i]) + (list(range(1, x + 1)),) + tuple(args[i + 1:]))
+                    alts.append(tuple(args[:i]) + ([x],) + tuple(args[i + 1:]))
+        if "has no attribute 'get'" in message or "has no attribute 'items'" in message:
+            for i, x in enumerate(args):
+                if isinstance(x, (list, tuple)):
+                    try:
+                        alts.append(tuple(args[:i]) + (dict(x),) + tuple(args[i + 1:]))
+                    except (TypeError, ValueError):
+                        pass
+        return alts
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            saved = copy.deepcopy(args)
+        except Exception:
+            saved = args
+        try:
+            return fn(*args, **kwargs)
+        except (TypeError, AttributeError) as first:
+            for alt in _alternatives(saved, first):
+                try:
+                    return fn(*copy.deepcopy(alt), **kwargs)
+                except Exception:
+                    continue
+            raise first
+
+    return wrapper
+
+
+{entry} = _call_adapter({entry})
+"""
+
+ALIAS = """
+
+for _alias in {aliases!r}:
+    if _alias not in globals():
+        globals()[_alias] = {entry}
+"""
+
+
+def name_variants(entry_point):
+    """Lower-case and snake_case spellings of the entry point, if they differ."""
+    snake = re.sub(r"(?<!^)(?=[A-Z])", "_", entry_point).lower()
+    snake = re.sub(r"_+", "_", snake)
+    return sorted({entry_point.lower(), snake} - {entry_point})
+
 
 SELF_TEST = """You will be shown a programming requirement and a candidate
 implementation. Write a short Python test script using plain `assert`
@@ -186,6 +293,14 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         "valid_filter": True,
         # Experiments only: append a comment recording whether selection switched.
         "trace": False,
+        # Add conservative coding conventions to every code-generation prompt.
+        "robust_coding": True,
+        # Also bind lower-case/snake_case spellings of the entry point (only if unbound).
+        "name_aliases": True,
+        # If a call raises TypeError/AttributeError, retry with adjusted arguments (surplus
+        # dropped, missing ones filled, differently-typed pair swapped, int<->digit string,
+        # n -> [1..n] for "not iterable", pairs -> dict); otherwise re-raise the original error.
+        "call_adapter": True,
     }
 
     def generate_code(self, env, messages, entry_point):
@@ -233,7 +348,8 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         public = json.dumps(
             {"prompt": problem["prompt"], "entry_point": entry_point}, ensure_ascii=False
         )
-        base = [{"role": "system", "content": GENERATE}, {"role": "user", "content": public}]
+        generate = GENERATE + (ROBUST if self.config["robust_coding"] else "")
+        base = [{"role": "system", "content": generate}, {"role": "user", "content": public}]
 
         draft, raw = self.generate_code(env, base, entry_point)
 
@@ -315,6 +431,12 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
 
         if int(self.config["final_candidates"]) > 1:
             code = self.select_by_consensus(env, problem, final_messages, clarification, code)
+        defined = re.search(r"def\s+" + re.escape(entry_point) + r"\s*\(", code)
+        if self.config["call_adapter"] and defined:
+            code = code.rstrip() + CALL_ADAPTER.replace("{entry}", entry_point)
+        variants = name_variants(entry_point) if self.config["name_aliases"] else []
+        if variants and re.search(r"def\s+" + re.escape(entry_point) + r"\s*\(", code):
+            code = code.rstrip() + ALIAS.format(aliases=variants, entry=entry_point)
         return "```python\n" + code + "\n```"
 
     def select_by_consensus(self, env, problem, messages, clarification, code):
