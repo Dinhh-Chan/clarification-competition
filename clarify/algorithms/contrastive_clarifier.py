@@ -46,7 +46,7 @@ Coding conventions (they never override the requirement or the user's answer):
 
 CALL_ADAPTER = r"""
 
-def _call_adapter(fn):
+def _call_adapter(fn, name):
     import copy, functools, inspect
 
     try:
@@ -98,24 +98,32 @@ def _call_adapter(fn):
 
     @functools.wraps(fn)
     def wrapper(*args, **kwargs):
+        # Recursive calls inside fn resolve the module-level name: point it at the
+        # original function while this call runs, so recursion depth is unchanged.
+        namespace = fn.__globals__
+        outer = namespace.get(name)
+        namespace[name] = fn
         try:
-            saved = copy.deepcopy(args)
-        except Exception:
-            saved = args
-        try:
-            return fn(*args, **kwargs)
-        except (TypeError, AttributeError) as first:
-            for alt in _alternatives(saved, first):
-                try:
-                    return fn(*copy.deepcopy(alt), **kwargs)
-                except Exception:
-                    continue
-            raise first
+            try:
+                saved = copy.deepcopy(args)
+            except Exception:
+                saved = args
+            try:
+                return fn(*args, **kwargs)
+            except (TypeError, AttributeError) as first:
+                for alt in _alternatives(saved, first):
+                    try:
+                        return fn(*copy.deepcopy(alt), **kwargs)
+                    except Exception:
+                        continue
+                raise first
+        finally:
+            namespace[name] = outer
 
     return wrapper
 
 
-{entry} = _call_adapter({entry})
+{entry} = _call_adapter({entry}, "{entry}")
 """
 
 ALIAS = """
