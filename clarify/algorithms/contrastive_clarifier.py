@@ -384,8 +384,21 @@ print("@@HARNESS@@" + json.dumps({"rows": _rows, "inputs": [repr(i) for i in _in
 _LITERAL_ERRORS = (ValueError, SyntaxError, TypeError, MemoryError, RecursionError)
 
 # Words and arrows that connect a call written in prose to its result.
-CONNECTOR_WORDS = ("==>", "==", "->", "=>", "➞", "→", r"returns?", r"should\s+return", r"should\s+be",
-                   r"outputs?", r"gives?", "is", ":")
+CONNECTOR_WORDS = (
+    "==>",
+    "==",
+    "->",
+    "=>",
+    "➞",
+    "→",
+    r"returns?",
+    r"should\s+return",
+    r"should\s+be",
+    r"outputs?",
+    r"gives?",
+    "is",
+    ":",
+)
 CONNECTOR = re.compile(r"\s*(?:" + "|".join(CONNECTOR_WORDS) + r")\s*", re.I)
 OPERATORS = frozenset("+-*/%^&|<>=")
 
@@ -397,7 +410,9 @@ def extract_code(response, entry_point, declared=None):
             tree = ast.parse(code.strip())
         except (SyntaxError, ValueError):
             continue
-        names = {n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))}
+        names = {
+            n.name for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
         if entry_point in names:
             return code.strip()
         if declared and declared in names:
@@ -450,7 +465,7 @@ def literal_span(text):
             value = ast.literal_eval(piece)
         except _LITERAL_ERRORS:
             continue
-        after = body[len(piece):].lstrip()
+        after = body[len(piece) :].lstrip()
         if after[:1] in OPERATORS:
             return False, None, 0
         return True, value, lead + len(piece)
@@ -475,10 +490,12 @@ def accept_deletion(original, edited, names):
     if not new or len(new) >= len(spans) or len(new) < 0.6 * len(spans):
         return None
     example = re.compile(r">>>|(?:" + "|".join(re.escape(n) for n in names if n) + r")\s*\(")
-    for tag, i1, i2, _, _ in difflib.SequenceMatcher(None, [s[0] for s in spans], new, autojunk=False).get_opcodes():
+    for tag, i1, i2, _, _ in difflib.SequenceMatcher(
+        None, [s[0] for s in spans], new, autojunk=False
+    ).get_opcodes():
         if tag == "equal":
             continue
-        if tag != "delete" or example.search(original[spans[i1][1]: spans[i2 - 1][2]]):
+        if tag != "delete" or example.search(original[spans[i1][1] : spans[i2 - 1][2]]):
             return None
     for line in original.splitlines():
         if line.strip().startswith("def ") and line.strip() not in edited:
@@ -494,7 +511,7 @@ def literal_calls(text, name):
         opening = hit.end() - 1
         node = None
         for close in (m.start() for m in re.finditer(r"[)\]}]", text[opening:])):
-            source = text[opening:opening + close + 1]
+            source = text[opening : opening + close + 1]
             try:
                 node = ast.parse(name + source, mode="eval").body
             except _LITERAL_ERRORS:
@@ -551,7 +568,7 @@ def parse_examples(prompt, names):
     pairs, seen = [], set()
     for name in names:
         for args, end in literal_calls(prompt, name):
-            line_head = prompt[prompt.rfind("\n", 0, end) + 1:end].lstrip()
+            line_head = prompt[prompt.rfind("\n", 0, end) + 1 : end].lstrip()
             rest = prompt[end:]
             if line_head.startswith(">>>") and not rest.split("\n", 1)[0].strip():
                 output = doctest_output(prompt, end)
@@ -559,8 +576,8 @@ def parse_examples(prompt, names):
             else:
                 link = CONNECTOR.match(rest)
                 ok, value = (False, None)
-                if link and rest[:link.end()].strip():
-                    ok, value = leading_literal(rest[link.end():].split("\n", 1)[0])
+                if link and rest[: link.end()].strip():
+                    ok, value = leading_literal(rest[link.end() :].split("\n", 1)[0])
             if ok and repr((args, value)) not in seen:
                 seen.add(repr((args, value)))
                 pairs.append((args, value))
@@ -577,13 +594,16 @@ def assigned_literals(code_block, names):
         return {}
     values = {}
     for node in tree.body:
-        target = node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else None
+        target = (
+            node.targets[0] if isinstance(node, ast.Assign) and len(node.targets) == 1 else None
+        )
         if isinstance(target, ast.Name) and target.id in names:
             try:
                 values[target.id] = ast.literal_eval(node.value)
             except _LITERAL_ERRORS:
                 pass
     return values
+
 
 def read_block_values(response, names):
     return assigned_literals(extract_fenced_code(response or ""), names)
@@ -594,7 +614,11 @@ def is_demo(node):
     if isinstance(node, ast.If):
         return "__name__" in ast.unparse(node.test)
     call = node.value if isinstance(node, ast.Expr) else None
-    return isinstance(call, ast.Call) and isinstance(call.func, ast.Name) and call.func.id in ("print", "input")
+    return (
+        isinstance(call, ast.Call)
+        and isinstance(call.func, ast.Name)
+        and call.func.id in ("print", "input")
+    )
 
 
 def sanitize(code):
@@ -633,19 +657,30 @@ def phrase(text, limit=220):
 
 
 def quoted_in(prompt, quote):
-    norm = lambda s: " ".join(s.lower().split())
+    def norm(text):
+        return " ".join(text.lower().split())
+
     quote = norm(quote.strip("\"' "))
     return len(quote) >= 8 and quote in norm(prompt)
 
 
 POST_CALL = re.compile(
     r"\s*,?\s*(?:it|this|that|the\s+function|the\s+(?:correct\s+|expected\s+)?(?:result|output|return\s+value|value))?\s*"
-    r"(?:(?:should|must|would|will|to)\s+)?(?:==>|==|->|=>|➞|→|returning|returns?|giving|gives?|outputs?|equals?|be|is|:)\s*", re.I)
-LITERAL_RELATION = re.compile(r"\s*(?:should\s+(?:return|give|be)|returns|gives|==>|==|->|=>|➞|→)\s*", re.I)
+    r"(?:(?:should|must|would|will|to)\s+)?(?:==>|==|->|=>|➞|→|returning|returns?|giving|gives?|outputs?|equals?|be|is|:)\s*",
+    re.I,
+)
+LITERAL_RELATION = re.compile(
+    r"\s*(?:should\s+(?:return|give|be)|returns|gives|==>|==|->|=>|➞|→)\s*", re.I
+)
 NEGATION = re.compile(r"\b(?:not|never|instead\s+of|rather\s+than)\b|n't\b", re.I)
-PROSE_HEAD = re.compile(r"\bfor\s+(?:the\s+|an?\s+)?(?:input|argument|value|call|n|x)?\s*(?:of\s+|=\s*)?", re.I)
-PROSE_VERB = re.compile(r"\s*,?\s*(?:it\s+|the\s+function\s+|the\s+result\s+|the\s+output\s+)?(?:should\s+|must\s+|would\s+|will\s+)?"
-                        r"(?:returns?|gives?|outputs?|be|is|equals?)\s+", re.I)
+PROSE_HEAD = re.compile(
+    r"\bfor\s+(?:the\s+|an?\s+)?(?:input|argument|value|call|n|x)?\s*(?:of\s+|=\s*)?", re.I
+)
+PROSE_VERB = re.compile(
+    r"\s*,?\s*(?:it\s+|the\s+function\s+|the\s+result\s+|the\s+output\s+)?(?:should\s+|must\s+|would\s+|will\s+)?"
+    r"(?:returns?|gives?|outputs?|be|is|equals?)\s+",
+    re.I,
+)
 
 
 def answer_relations(answer, names):
@@ -655,34 +690,36 @@ def answer_relations(answer, names):
     found = []
     for name in names:
         for args, end in literal_calls(text, name):
-            rest = text[end:end + 300]
+            rest = text[end : end + 300]
             connector = POST_CALL.match(rest)
             if not connector or not rest[: connector.end()].strip(" ,"):
                 continue
             call_start = text.rfind(name + "(", 0, end)
-            if NEGATION.search(text[max(0, call_start - 12):call_start] + rest[: connector.end()]):
+            if NEGATION.search(
+                text[max(0, call_start - 12) : call_start] + rest[: connector.end()]
+            ):
                 continue
-            ok, value = leading_literal(rest[connector.end():].split("\n", 1)[0])
+            ok, value = leading_literal(rest[connector.end() :].split("\n", 1)[0])
             if ok:
                 found.append((tuple(args), value))
     # A quoted or bracketed literal that "should return" another one (single-argument calls).
     for start in re.finditer(r"['\"\[(]", text):
         if start.start() and text[start.start() - 1].isalnum():
             continue
-        ok_arg, arg, used = literal_span(text[start.start(): start.start() + 300])
+        ok_arg, arg, used = literal_span(text[start.start() : start.start() + 300])
         verb = LITERAL_RELATION.match(text, start.start() + used) if ok_arg and used else None
-        if not verb or NEGATION.search(text[max(0, start.start() - 40): verb.end()]):
+        if not verb or NEGATION.search(text[max(0, start.start() - 40) : verb.end()]):
             continue
-        ok_value, value = leading_literal(text[verb.end(): verb.end() + 300].split("\n", 1)[0])
+        ok_value, value = leading_literal(text[verb.end() : verb.end() + 300].split("\n", 1)[0])
         if ok_value:
             found.append(((arg,), value))
     for head in PROSE_HEAD.finditer(text):
-        after = text[head.end(): head.end() + 400]
+        after = text[head.end() : head.end() + 400]
         ok_arg, arg, used = literal_span(after)
         verb = PROSE_VERB.match(after[used:]) if ok_arg and used else None
         if not verb or NEGATION.search(after[: used + verb.end()]):
             continue
-        ok_value, value = leading_literal(after[used + verb.end():].split("\n", 1)[0])
+        ok_value, value = leading_literal(after[used + verb.end() :].split("\n", 1)[0])
         if ok_value:
             found.append(((arg,), value))
     return found
@@ -690,10 +727,16 @@ def answer_relations(answer, names):
 
 def stated_in(relations, args, expected):
     """True when the answer explicitly states that these arguments give this result."""
+
     def same(a, b):
         return type(a) is type(b) and a == b
-    return any(len(a) == len(args) and all(same(x, y) for x, y in zip(a, args)) and same(v, expected)
-               for a, v in relations)
+
+    return any(
+        len(a) == len(args)
+        and all(same(x, y) for x, y in zip(a, args, strict=True))
+        and same(v, expected)
+        for a, v in relations
+    )
 
 
 def safe_property(expr):
@@ -735,15 +778,27 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
 
     @staticmethod
     def code_messages(user_content):
-        return [{"role": "system", "content": GENERATE + ROBUST}, {"role": "user", "content": user_content}]
+        return [
+            {"role": "system", "content": GENERATE + ROBUST},
+            {"role": "user", "content": user_content},
+        ]
 
     def to_code(self, env, response, messages, entry, declared):
         code = extract_code(response, entry, declared)
         if code is None and response:
-            retry = self.complete(env, messages + [
-                {"role": "assistant", "content": response},
-                {"role": "user", "content": "Return syntactically valid Python defining " + entry + ". Return code only."},
-            ])
+            retry = self.complete(
+                env,
+                messages
+                + [
+                    {"role": "assistant", "content": response},
+                    {
+                        "role": "user",
+                        "content": "Return syntactically valid Python defining "
+                        + entry
+                        + ". Return code only.",
+                    },
+                ],
+            )
             code = extract_code(retry, entry, declared)
         return sanitize(code) if code else None
 
@@ -764,15 +819,24 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         """Run finished candidates on checks, probe inputs and properties in one sandbox call."""
         if not codes:
             return None
-        inputs = {"PROBE_CODE": probe_code or "", "CANDIDATES": [self.finish(c, entry) for c in codes], "ENTRY": entry,
-                  "CHECKS": [(tuple(a), e) for a, e in checks], "PROPS": list(props)}
+        inputs = {
+            "PROBE_CODE": probe_code or "",
+            "CANDIDATES": [self.finish(c, entry) for c in codes],
+            "ENTRY": entry,
+            "CHECKS": [(tuple(a), e) for a, e in checks],
+            "PROPS": list(props),
+        }
         script = "".join(f"{name} = {value!r}\n" for name, value in inputs.items()) + HARNESS
         try:
             reports = re.findall(r"@@HARNESS@@\s*([^\n]*)", env.exec_code(script) or "")
             result = json.loads(reports[-1])
         except Exception:
             return None
-        return result if isinstance(result, dict) and len(result.get("rows", [])) == len(codes) else None
+        return (
+            result
+            if isinstance(result, dict) and len(result.get("rows", [])) == len(codes)
+            else None
+        )
 
     @staticmethod
     def passed(row, indices):
@@ -782,6 +846,7 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
     def support(rows, i):
         def sig(row, k):
             return tuple(p[1] if p[0] == "ok" else (k, p[0], p[1]) for p in row["probes"])
+
         if rows[i]["load"]:
             return 0
         return sum(1 for k, r in enumerate(rows) if not r["load"] and sig(r, k) == sig(rows[i], i))
@@ -791,7 +856,14 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             row = rows[i]
             if row["load"]:
                 return (-1, -1, -1, -1, -i)
-            return (self.passed(row, hard), self.passed(row, soft), row.get("props", 0), self.support(rows, i), -i)
+            return (
+                self.passed(row, hard),
+                self.passed(row, soft),
+                row.get("props", 0),
+                self.support(rows, i),
+                -i,
+            )
+
         return max(range(len(rows)), key=key)
 
     # Question -------------------------------------------------------------------------------
@@ -802,8 +874,11 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         rows = [r for r in (result or {}).get("rows", []) if not r["load"]]
         lines = []
         for k, source in enumerate(inputs):
-            outs = [r["probes"][k][2] if r["probes"][k][0] == "ok" else "raises " + r["probes"][k][1]
-                    for r in rows if k < len(r["probes"])]
+            outs = [
+                r["probes"][k][2] if r["probes"][k][0] == "ok" else "raises " + r["probes"][k][1]
+                for r in rows
+                if k < len(r["probes"])
+            ]
             mark = " (drafts disagree)" if len(set(outs)) > 1 else ""
             lines.append(f"{k + 1}. {call_text(entry, source)} -> " + " | ".join(outs) + mark)
         return "\n".join(lines) or "(no probe inputs)"
@@ -811,12 +886,23 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
     def contract_question(self, env, prompt, entry, anchor, result, anchor_row):
         """One fixed-form question; returns (question, example_check or None)."""
         inputs = (result or {}).get("inputs", [])
-        user = ("Requirement:\n" + prompt + "\n\nDraft:\n```python\n" + anchor + "\n```\n\nProbe results "
-                "(one column per draft, the first column is this draft):\n" + self.table(result, entry))
+        user = (
+            "Requirement:\n"
+            + prompt
+            + "\n\nDraft:\n```python\n"
+            + anchor
+            + "\n```\n\nProbe results "
+            "(one column per draft, the first column is this draft):\n" + self.table(result, entry)
+        )
         fields = None
         for _ in range(2):
-            reply = self.complete(env, [{"role": "system", "content": CONTRACT.replace("{entry}", entry)},
-                                        {"role": "user", "content": user}])
+            reply = self.complete(
+                env,
+                [
+                    {"role": "system", "content": CONTRACT.replace("{entry}", entry)},
+                    {"role": "user", "content": user},
+                ],
+            )
             match = re.search(r"\{.*\}", reply or "", re.S)
             try:
                 fields = json.loads(match.group(0)) if match else None
@@ -827,9 +913,16 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             fields = None
 
         conflict = (fields or {}).get("conflict")
-        if isinstance(conflict, dict) and quoted_in(prompt, str(conflict.get("a", ""))) and quoted_in(prompt, str(conflict.get("b", ""))):
+        if (
+            isinstance(conflict, dict)
+            and quoted_in(prompt, str(conflict.get("a", "")))
+            and quoted_in(prompt, str(conflict.get("b", "")))
+        ):
             a, b = phrase(conflict["a"], 160), phrase(conflict["b"], 160)
-            return f'About {entry}: the requirement says "{a}" but also "{b}". Which of the two is intended?', None
+            return (
+                f'About {entry}: the requirement says "{a}" but also "{b}". Which of the two is intended?',
+                None,
+            )
 
         # An executed example from the anchor draft (a real output, not a claim).
         probes = anchor_row["probes"] if anchor_row and not anchor_row["load"] else []
@@ -853,10 +946,25 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
                 parts += f" For example, {example[1]} returns {example[2]}."
             # A generic closing: a specific alternative pulls the single answer onto that
             # point instead of the draft's biggest deviation.
-            question = parts + " Is that what you intend, or should it behave differently or return a different format?"
+            question = (
+                parts
+                + " Is that what you intend, or should it behave differently or return a different format?"
+            )
         else:
-            reply = self.complete(env, [{"role": "system", "content": FALLBACK_ASK},
-                                        {"role": "user", "content": "Requirement:\n" + prompt + "\n\nDraft:\n```python\n" + anchor + "\n```"}])
+            reply = self.complete(
+                env,
+                [
+                    {"role": "system", "content": FALLBACK_ASK},
+                    {
+                        "role": "user",
+                        "content": "Requirement:\n"
+                        + prompt
+                        + "\n\nDraft:\n```python\n"
+                        + anchor
+                        + "\n```",
+                    },
+                ],
+            )
             question = clean_question(reply)
             if question and entry not in re.findall(r"\w+", question):
                 question = f"About {entry}: " + question
@@ -878,8 +986,13 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         declared = declared_name(prompt, entry)
         if self.config["clean_contradictions"]:
             # The simulated user still sees the original text; only our own steps use the cleaned one.
-            reply = self.complete(env, [{"role": "user", "content": CLEAN.replace("{prompt}", prompt)}])
-            prompt = accept_deletion(prompt, edited_text(reply), [entry, declared, "candidate"]) or prompt
+            reply = self.complete(
+                env, [{"role": "user", "content": CLEAN.replace("{prompt}", prompt)}]
+            )
+            prompt = (
+                accept_deletion(prompt, edited_text(reply), [entry, declared, "candidate"])
+                or prompt
+            )
         public = json.dumps({"prompt": prompt, "entry_point": entry}, ensure_ascii=False)
         fallback = "def " + entry + "(*args, **kwargs):\n    return None"
         examples = parse_examples(prompt, [entry] + ([declared] if declared else []))
@@ -888,9 +1001,16 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         # 1. Drafts and probe inputs, then run them on the stated examples and probes.
         draft_messages = self.code_messages(public)
         probe_system = PROBE.format(num_probes=int(self.config["probes"]), entry_point=entry)
-        replies = self.parallel(env, [draft_messages] * int(self.config["drafts"])
-                                + [[{"role": "system", "content": probe_system}, {"role": "user", "content": prompt}]])
-        drafts = [c for c in (self.to_code(env, r, draft_messages, entry, declared) for r in replies[:-1]) if c]
+        replies = self.parallel(
+            env,
+            [draft_messages] * int(self.config["drafts"])
+            + [[{"role": "system", "content": probe_system}, {"role": "user", "content": prompt}]],
+        )
+        drafts = [
+            c
+            for c in (self.to_code(env, r, draft_messages, entry, declared) for r in replies[:-1])
+            if c
+        ]
         probe_code = extract_fenced_code(replies[-1])
         result = self.execute(env, drafts, entry, examples, probe_code) if drafts else None
         anchor_index = self.rank(result["rows"], [], stated) if result else 0
@@ -905,7 +1025,9 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
         question = answer = None
         example_check = None
         if env.can_ask():
-            asked, example_check = self.contract_question(env, prompt, entry, anchor, result, anchor_row)
+            asked, example_check = self.contract_question(
+                env, prompt, entry, anchor, result, anchor_row
+            )
             if asked:
                 try:
                     answer = env.ask_human(asked)
@@ -923,14 +1045,44 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             return "```python\n" + self.finish(code, entry) + "\n```"
 
         # 3. Finals, compiled answer and fresh probes, in parallel.
-        final_messages = self.code_messages(FINAL.format(prompt=prompt, entry=entry, question=question, answer=answer, obligations=""))
-        numbered = "\n".join(f"{i + 1}. {call_text(entry, repr(tuple(a)))} -> {e!r}" for i, (a, e) in enumerate(examples)) or "(none)"
-        compile_messages = [{"role": "system", "content": COMPILE},
-                            {"role": "user", "content": f"Requirement:\n{prompt}\n\nQuestion: {question}\nAnswer: {answer}\n\nStated examples:\n{numbered}"}]
-        probe_messages = [{"role": "system", "content": probe_system},
-                          {"role": "user", "content": prompt + "\n\nThe user was asked: " + question + "\nThe user answered: " + answer}]
-        replies = self.parallel(env, [final_messages] * int(self.config["finals"]) + [compile_messages, probe_messages])
-        finals = [c for c in (self.to_code(env, r, final_messages, entry, declared) for r in replies[:-2]) if c] or [anchor]
+        final_messages = self.code_messages(
+            FINAL.format(
+                prompt=prompt, entry=entry, question=question, answer=answer, obligations=""
+            )
+        )
+        numbered = (
+            "\n".join(
+                f"{i + 1}. {call_text(entry, repr(tuple(a)))} -> {e!r}"
+                for i, (a, e) in enumerate(examples)
+            )
+            or "(none)"
+        )
+        compile_messages = [
+            {"role": "system", "content": COMPILE},
+            {
+                "role": "user",
+                "content": f"Requirement:\n{prompt}\n\nQuestion: {question}\nAnswer: {answer}\n\nStated examples:\n{numbered}",
+            },
+        ]
+        probe_messages = [
+            {"role": "system", "content": probe_system},
+            {
+                "role": "user",
+                "content": prompt
+                + "\n\nThe user was asked: "
+                + question
+                + "\nThe user answered: "
+                + answer,
+            },
+        ]
+        replies = self.parallel(
+            env, [final_messages] * int(self.config["finals"]) + [compile_messages, probe_messages]
+        )
+        finals = [
+            c
+            for c in (self.to_code(env, r, final_messages, entry, declared) for r in replies[:-2])
+            if c
+        ] or [anchor]
         values = read_block_values(replies[-2], {"CONFIRMS", "CALLS", "PROPERTIES", "EXAMPLES"})
         probe_code = extract_fenced_code(replies[-1]) or probe_code
 
@@ -943,14 +1095,24 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             hard.append(example_check)
         for item in values.get("CALLS") or []:
             if isinstance(item, (list, tuple)) and len(item) == 2:
-                args = item[0] if isinstance(item[0], tuple) else (tuple(item[0]) if isinstance(item[0], list) else (item[0],))
+                args = (
+                    item[0]
+                    if isinstance(item[0], tuple)
+                    else (tuple(item[0]) if isinstance(item[0], list) else (item[0],))
+                )
                 if repr((args, item[1])) not in {repr(c) for c in hard + soft}:
                     (hard if stated_in(relations, args, item[1]) else soft).append((args, item[1]))
         verdicts = values.get("EXAMPLES") if isinstance(values.get("EXAMPLES"), list) else []
         for i, example in enumerate(examples):
             verdict = str(verdicts[i]).upper() if i < len(verdicts) else "KEEP"
-            if verdict.startswith(("CONFIRMED", "KEEP")) and repr(example) not in {repr(c) for c in hard + soft}:
-                (hard if verdict.startswith("CONFIRMED") and stated_in(relations, *example) else soft).append(example)
+            if verdict.startswith(("CONFIRMED", "KEEP")) and repr(example) not in {
+                repr(c) for c in hard + soft
+            }:
+                (
+                    hard
+                    if verdict.startswith("CONFIRMED") and stated_in(relations, *example)
+                    else soft
+                ).append(example)
         props = [p for p in (safe_property(x) for x in (values.get("PROPERTIES") or [])[:3]) if p]
         checks = (hard + soft)[:12]
         hard_idx = list(range(min(len(hard), len(checks))))
@@ -958,11 +1120,29 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
 
         # 4. Select; one rescue candidate if no final meets every hard check.
         result = self.execute(env, finals, entry, checks, probe_code, props)
-        if result and hard_idx and not any(not r["load"] and self.passed(r, hard_idx) == len(hard_idx) for r in result["rows"]):
-            lines = "\n".join(f"- {call_text(entry, repr(tuple(checks[i][0])))} == {checks[i][1]!r}" for i in hard_idx)
-            rescue_messages = self.code_messages(FINAL.format(prompt=prompt, entry=entry, question=question, answer=answer,
-                                                              obligations=OBLIGATIONS.format(lines=lines)))
-            rescue = self.to_code(env, self.complete(env, rescue_messages), rescue_messages, entry, declared)
+        if (
+            result
+            and hard_idx
+            and not any(
+                not r["load"] and self.passed(r, hard_idx) == len(hard_idx) for r in result["rows"]
+            )
+        ):
+            lines = "\n".join(
+                f"- {call_text(entry, repr(tuple(checks[i][0])))} == {checks[i][1]!r}"
+                for i in hard_idx
+            )
+            rescue_messages = self.code_messages(
+                FINAL.format(
+                    prompt=prompt,
+                    entry=entry,
+                    question=question,
+                    answer=answer,
+                    obligations=OBLIGATIONS.format(lines=lines),
+                )
+            )
+            rescue = self.to_code(
+                env, self.complete(env, rescue_messages), rescue_messages, entry, declared
+            )
             if rescue:
                 finals = finals + [rescue]
                 result = self.execute(env, finals, entry, checks, probe_code, props) or result
@@ -970,7 +1150,11 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             # Every final was written after the answer: a provisional check none of them
             # satisfies is one the answer overrides (or a corrupted example); drop it.
             live = [r for r in result["rows"] if not r["load"]]
-            keep = [i for i in range(len(checks)) if i in hard_idx or any(i < len(r["checks"]) and r["checks"][i][0] for r in live)]
+            keep = [
+                i
+                for i in range(len(checks))
+                if i in hard_idx or any(i < len(r["checks"]) and r["checks"][i][0] for r in live)
+            ]
             if len(keep) < len(checks):
                 checks = [checks[i] for i in keep]
                 for r in live:
@@ -989,10 +1173,14 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
             failing = [i for i in range(len(checks)) if i < len(status) and not status[i][0]]
             if not failing:
                 break
-            failures = "\n".join(f"- {call_text(entry, repr(tuple(checks[i][0])))} should return {checks[i][1]!r}, got {status[i][1]}"
-                                 for i in failing[:4])
-            messages = final_messages + [{"role": "assistant", "content": "```python\n" + code + "\n```"},
-                                         {"role": "user", "content": REPAIR.format(failures=failures)}]
+            failures = "\n".join(
+                f"- {call_text(entry, repr(tuple(checks[i][0])))} should return {checks[i][1]!r}, got {status[i][1]}"
+                for i in failing[:4]
+            )
+            messages = final_messages + [
+                {"role": "assistant", "content": "```python\n" + code + "\n```"},
+                {"role": "user", "content": REPAIR.format(failures=failures)},
+            ]
             repaired = self.to_code(env, self.complete(env, messages), messages, entry, declared)
             if not repaired:
                 break
@@ -1006,7 +1194,17 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
 
         # 6. Answer-compliance review under the same rule; without checks a cited contradiction is required.
         if self.config["review"]:
-            reply = self.complete(env, [{"role": "user", "content": REVIEW.format(prompt=prompt, question=question, answer=answer, entry=entry, code=code)}])
+            reply = self.complete(
+                env,
+                [
+                    {
+                        "role": "user",
+                        "content": REVIEW.format(
+                            prompt=prompt, question=question, answer=answer, entry=entry, code=code
+                        ),
+                    }
+                ],
+            )
             if reply and not reply.strip().upper().startswith("OK"):
                 fixed = extract_code(reply, entry, declared)
                 if fixed:
@@ -1015,7 +1213,9 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
                         trial = self.execute(env, [fixed], entry, checks, None)
                         if trial and not trial["rows"][0]["load"]:
                             new = trial["rows"][0]["checks"]
-                            if keeps_hard(new) and sum(c[0] for c in new) >= sum(c[0] for c in status):
+                            if keeps_hard(new) and sum(c[0] for c in new) >= sum(
+                                c[0] for c in status
+                            ):
                                 code = fixed
                     elif "CONTRADICTION:" in reply.upper():
                         code = fixed
