@@ -17,9 +17,10 @@ return 3", "for input 4, return 3"; negated statements excluded) are binding; st
 examples and calls the compiler derived are provisional, because prompt examples may be
 corrupted, and a provisional check that no fresh implementation satisfies is dropped.
 Implementations are ranked by binding checks, provisional checks, answer-entailed
-properties and execution agreement; repairs and an answer-compliance review are kept
-only if no satisfied binding check is lost. The delivered function retries failing calls
-with adjusted arguments and gets builtin-safe name aliases.
+properties and execution agreement; repairs and an answer-compliance review run only when
+there are checks to verify them and are kept only if no satisfied binding check is lost. The
+delivered function retries failing calls with adjusted arguments and gets builtin-safe name
+aliases.
 
 Related ideas appear in the literature on interactive and test-driven code generation
 (TiCoder, AssumptionMiner).
@@ -1192,8 +1193,9 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
                 break
             code, status = repaired, new
 
-        # 6. Answer-compliance review under the same rule; without checks a cited contradiction is required.
-        if self.config["review"]:
+        # 6. Answer-compliance review under the same rule. Without checks a rewrite cannot be
+        # verified, so the review is skipped: unverified rewrites broke more code than they fixed.
+        if self.config["review"] and checks and status:
             reply = self.complete(
                 env,
                 [
@@ -1209,14 +1211,9 @@ class ContrastiveClarifier(ClarificationAlgorithmBase):
                 fixed = extract_code(reply, entry, declared)
                 if fixed:
                     fixed = sanitize(fixed)
-                    if checks and status:
-                        trial = self.execute(env, [fixed], entry, checks, None)
-                        if trial and not trial["rows"][0]["load"]:
-                            new = trial["rows"][0]["checks"]
-                            if keeps_hard(new) and sum(c[0] for c in new) >= sum(
-                                c[0] for c in status
-                            ):
-                                code = fixed
-                    elif "CONTRADICTION:" in reply.upper():
-                        code = fixed
+                    trial = self.execute(env, [fixed], entry, checks, None)
+                    if trial and not trial["rows"][0]["load"]:
+                        new = trial["rows"][0]["checks"]
+                        if keeps_hard(new) and sum(c[0] for c in new) >= sum(c[0] for c in status):
+                            code = fixed
         return "```python\n" + self.finish(code, entry) + "\n```"
